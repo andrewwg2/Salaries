@@ -52,6 +52,8 @@ if "pt_amount_paid_form" not in st.session_state:
     st.session_state.pt_amount_paid_form = 0.0
 if "pt_sessions_purchased_form" not in st.session_state:
     st.session_state.pt_sessions_purchased_form = 1
+if "pt_sessions_remaining_form" not in st.session_state:
+    st.session_state.pt_sessions_remaining_form = 1
 if "pt_membership_form_key" not in st.session_state:
     st.session_state.pt_membership_form_key = "pt_membership_form_initial"
 if "confirm_delete_pt_membership_id" not in st.session_state:
@@ -75,6 +77,8 @@ if "member_phone" not in st.session_state:
     st.session_state.member_phone = ""
 if "member_is_active" not in st.session_state:
     st.session_state.member_is_active = True
+if "member_join_date" not in st.session_state:
+    st.session_state.member_join_date = default_today
 if "member_form_key" not in st.session_state:
     st.session_state.member_form_key = "member_form_initial"
 if "confirm_delete_member_id" not in st.session_state:
@@ -280,10 +284,11 @@ def render_memberships_tab():
                                 record_id = api.create_group_class_membership(
                                     member_id=new_gc_member_id,
                                     plan_id=new_gc_plan_id,
-                                    start_date_str=new_gc_start_date.strftime(
+                                    start_date=new_gc_start_date.strftime(
                                         "%Y-%m-%d"
                                     ),
                                     amount_paid=new_gc_amount_paid,
+                                    purchase_date=date.today().strftime("%Y-%m-%d"),
                                 )
                                 if record_id:
                                     st.success(
@@ -372,7 +377,7 @@ def render_memberships_tab():
                         st.error("Member and Plan must be selected.")
                     else:
                         try:
-                            success_gc_update = api.update_group_class_membership_record(
+                            success_gc_update = api.update_group_class_membership(
                                 membership_id=st.session_state.selected_gc_membership_id,
                                 member_id=st.session_state.gc_member_id_form,
                                 plan_id=edit_gc_plan_id,
@@ -562,6 +567,9 @@ def render_memberships_tab():
                         st.session_state.pt_sessions_purchased_form = (
                             selected_pt_data.sessions_total or 1
                         )
+                        st.session_state.pt_sessions_remaining_form = (
+                            selected_pt_data.sessions_remaining or 0
+                        )
                         if (
                             hasattr(selected_pt_data, "notes")
                             and "pt_notes_form" in st.session_state
@@ -639,7 +647,7 @@ def render_memberships_tab():
                                 member_id=new_pt_member_id,
                                 purchase_date=new_pt_purchase_date.strftime("%Y-%m-%d"),
                                 amount_paid=new_pt_amount_paid,
-                                sessions_purchased=new_pt_sessions_purchased,
+                                sessions_total=new_pt_sessions_purchased,
                             )
                             if record_id:
                                 st.success(
@@ -723,11 +731,13 @@ def render_memberships_tab():
                         try:
                             success_pt_update = api.update_pt_membership(
                                 membership_id=st.session_state.selected_pt_membership_id,
+                                member_id=st.session_state.pt_member_id_form,
                                 purchase_date=edit_pt_purchase_date.strftime(
                                     "%Y-%m-%d"
                                 ),
                                 amount_paid=edit_pt_amount_paid,
-                                sessions_purchased=edit_pt_sessions_purchased,
+                                sessions_total=edit_pt_sessions_purchased,
+                                sessions_remaining=st.session_state.pt_sessions_remaining_form,
                             )
                             if success_pt_update:
                                 st.success(
@@ -834,6 +844,7 @@ def render_members_tab():
         st.session_state.member_name = ""
         st.session_state.member_email = ""
         st.session_state.member_phone = ""
+        st.session_state.member_join_date = date.today()
         st.session_state.member_is_active = True
         st.session_state.member_form_key = f"member_form_{datetime.now().timestamp()}"
         st.session_state.confirm_delete_member_id = None
@@ -849,6 +860,20 @@ def render_members_tab():
         except Exception as e:
             st.error(f"Error fetching members: {e}")
             all_members = []
+
+        # Display members table
+        if all_members:
+            members_data = []
+            for member in all_members:
+                members_data.append({
+                    "Name": member.name,
+                    "Phone": member.phone,
+                    "Email": member.email or "N/A",
+                    "Join Date": member.join_date,
+                    "Status": "Active" if member.is_active else "Inactive"
+                })
+            df_members = pd.DataFrame(members_data)
+            st.dataframe(df_members, hide_index=True, use_container_width=True)
 
         member_options = {
             member.id: f"{member.name} ({member.phone or 'N/A'})"
@@ -888,6 +913,15 @@ def render_members_tab():
                     st.session_state.member_name = selected_member_data.name or ""
                     st.session_state.member_email = selected_member_data.email or ""
                     st.session_state.member_phone = selected_member_data.phone or ""
+                    join_date_val = selected_member_data.join_date
+                    if isinstance(join_date_val, str):
+                        st.session_state.member_join_date = datetime.strptime(
+                            join_date_val, "%Y-%m-%d"
+                        ).date()
+                    elif isinstance(join_date_val, date):
+                        st.session_state.member_join_date = join_date_val
+                    else:
+                        st.session_state.member_join_date = date.today()
                     st.session_state.member_is_active = bool(
                         selected_member_data.is_active
                     )
@@ -912,6 +946,9 @@ def render_members_tab():
             )
             phone_form_val = st.text_input(
                 "Phone", value=st.session_state.member_phone, key="member_form_phone"
+            )
+            join_date_form_val = st.date_input(
+                "Join Date", value=st.session_state.member_join_date, key="member_form_join_date"
             )
             is_active_form_val = st.checkbox(
                 "Is Active",
@@ -943,12 +980,14 @@ def render_members_tab():
                             name=name_form_val,
                             phone=phone_form_val,
                             email=email_form_val,
+                            join_date=join_date_form_val.strftime("%Y-%m-%d"),
                         )
                         if member_id:
                             st.success(
                                 f"Member '{name_form_val}' added successfully with ID: {member_id}"
                             )
                             clear_member_form(clear_selection=True)
+                            st.rerun()
                         else:
                             st.error("Failed to add member. Please check details.")
                     except ValueError as e:
@@ -965,6 +1004,7 @@ def render_members_tab():
                             name=name_form_val,
                             phone=phone_form_val,
                             email=email_form_val,
+                            join_date=join_date_form_val.strftime("%Y-%m-%d"),
                             is_active=is_active_form_val,
                         )
                         if success_member_update:
@@ -972,6 +1012,7 @@ def render_members_tab():
                                 f"Member '{name_form_val}' updated successfully."
                             )
                             clear_member_form(clear_selection=True)
+                            st.rerun()
                         else:
                             st.error(
                                 "Failed to update member. The phone number might already be in use by another member."
